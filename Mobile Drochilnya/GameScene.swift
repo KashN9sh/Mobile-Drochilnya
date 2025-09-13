@@ -53,6 +53,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var arrowSpeedPointsPerSecond: CGFloat = 900
     private var enemySpawnInterval: TimeInterval = 1.2
     private var enemySpeedPointsPerSecond: CGFloat = 120
+    private var arrowParallelSpacing: CGFloat = 18
     
     // Combat
     private var baseArrowDamage: Int = 1
@@ -176,11 +177,27 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         guard let playerNode else { return }
         if isPerkChoiceActive || isGameOver { return }
         let total = max(1, arrowsPerShot)
-        let spread: CGFloat = total > 1 ? 0.6 : 0.0
-        for i in 0..<total {
-            let t = total == 1 ? 0.0 : (CGFloat(i) / CGFloat(total - 1) - 0.5)
-            let angleOffset = spread * t
-            spawnArrow(from: playerNode.position, angleOffset: angleOffset)
+        
+        // Compute symmetric horizontal offsets so all arrows go straight up in parallel
+        let spacing = arrowParallelSpacing
+        var offsets: [CGFloat] = []
+        if total == 1 {
+            offsets = [0]
+        } else {
+            // offsets: centered around 0; works for even/odd counts
+            // offset(k) = (k - (n-1)/2) * spacing
+            for k in 0..<total {
+                let offset = (CGFloat(k) - CGFloat(total - 1) / 2.0) * spacing
+                offsets.append(offset)
+            }
+        }
+        
+        let margin: CGFloat = 12
+        for dx in offsets {
+            var startX = playerNode.position.x + dx
+            startX = min(max(startX, frame.minX + margin), frame.maxX - margin)
+            let start = CGPoint(x: startX, y: playerNode.position.y)
+            spawnArrow(from: start, angleOffset: 0)
         }
     }
     
@@ -462,6 +479,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         removeAction(forKey: "autoFire")
         removeAction(forKey: "spawnEnemies")
+        pauseGameplay()
         
         let overlay = SKNode()
         overlay.name = "perkOverlay"
@@ -498,7 +516,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
     
     private func handlePerkTouch(_ touches: Set<UITouch>) {
-        guard let touch = touches.first, let overlay = perkOverlay else { return }
+        guard let touch = touches.first, perkOverlay != nil else { return }
         let location = touch.location(in: self)
         let nodesAtPoint = nodes(at: location)
         for node in nodesAtPoint {
@@ -518,6 +536,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         level += 1
         triggerHapticPerk()
         dismissPerkChoice()
+        resumeGameplay()
         startAutoFire()
         startEnemySpawns()
     }
@@ -528,6 +547,22 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         isPerkChoiceActive = false
     }
     
+    private func pauseGameplay() {
+        physicsWorld.speed = 0
+        enumerateChildNodes(withName: "enemy") { node, _ in node.isPaused = true }
+        enumerateChildNodes(withName: "arrow") { node, _ in node.isPaused = true }
+        enumerateChildNodes(withName: "coin") { node, _ in node.isPaused = true }
+        currentBossNode?.isPaused = true
+    }
+    
+    private func resumeGameplay() {
+        physicsWorld.speed = 1
+        enumerateChildNodes(withName: "enemy") { node, _ in node.isPaused = false }
+        enumerateChildNodes(withName: "arrow") { node, _ in node.isPaused = false }
+        enumerateChildNodes(withName: "coin") { node, _ in node.isPaused = false }
+        currentBossNode?.isPaused = false
+    }
+
     private func generatePerkChoices(count: Int) -> [PerkType] {
         var pool = PerkType.allCases
         pool.shuffle()
