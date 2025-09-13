@@ -7,6 +7,7 @@
 
 import SpriteKit
 import GameplayKit
+import UIKit
 
 struct PhysicsCategory {
     static let none: UInt32 = 0
@@ -22,6 +23,15 @@ private struct EnemyType {
     let baseHP: Int
     let speed: CGFloat
     let weight: CGFloat
+}
+
+private enum PerkType: CaseIterable {
+    case fireRate
+    case extraArrow
+    case critChance
+    case critDamage
+    case magnet
+    case damage
 }
 
 class GameScene: SKScene, SKPhysicsContactDelegate {
@@ -51,9 +61,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     
     // Loot
     private var coinMagnetRadius: CGFloat = 80
+    private var coinFallSpeedPointsPerSecond: CGFloat = 220
     
     // Enemy variety
     private var enemyTypes: [EnemyType] = []
+    private var isBossActive: Bool = false
+    private weak var currentBossNode: SKSpriteNode?
+    
+    // Perks UI
+    private var isPerkChoiceActive: Bool = false
+    private var perkOverlay: SKNode?
+    
+    // Death/Restart
+    private var isGameOver: Bool = false
+    private var deathOverlay: SKNode?
     
     // HUD
     private var killsLabel: SKLabelNode!
@@ -91,7 +112,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         body.isDynamic = false
         body.categoryBitMask = PhysicsCategory.player
         body.collisionBitMask = 0
-        body.contactTestBitMask = 0
+        body.contactTestBitMask = PhysicsCategory.enemy
         node.physicsBody = body
         
         addChild(node)
@@ -153,6 +174,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     
     private func fireVolley() {
         guard let playerNode else { return }
+        if isPerkChoiceActive || isGameOver { return }
         let total = max(1, arrowsPerShot)
         let spread: CGFloat = total > 1 ? 0.6 : 0.0
         for i in 0..<total {
@@ -201,17 +223,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
     
     private func randomEnemyType() -> EnemyType {
-        // Weighted random
         let totalWeight = enemyTypes.reduce(0) { $0 + $1.weight }
         var roll = CGFloat.random(in: 0...totalWeight)
         for type in enemyTypes {
             if roll < type.weight { return type }
             roll -= type.weight
         }
-        return enemyTypes.first! // fallback safe
+        return enemyTypes.first!
     }
     
     private func spawnEnemy() {
+        if isPerkChoiceActive || isGameOver || isBossActive { return }
         let type = randomEnemyType()
         let size = CGSize(width: 32, height: 32)
         let enemy = SKSpriteNode(color: type.color, size: size)
@@ -228,7 +250,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         body.allowsRotation = false
         body.categoryBitMask = PhysicsCategory.enemy
         body.collisionBitMask = 0
-        body.contactTestBitMask = PhysicsCategory.arrow
+        body.contactTestBitMask = PhysicsCategory.arrow | PhysicsCategory.player
         enemy.physicsBody = body
         
         let hpScale = 1 + max(0, (level - 1)) / 3
@@ -244,12 +266,52 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         enemy.run(SKAction.sequence([move, .removeFromParent()]))
     }
     
-    // MARK: - Touch handling (move player horizontally)
+    private func spawnBoss() {
+        if isPerkChoiceActive || isGameOver || isBossActive { return }
+        isBossActive = true
+        removeAction(forKey: "spawnEnemies")
+        
+        let size = CGSize(width: 70, height: 70)
+        let boss = SKSpriteNode(color: .purple, size: size)
+        boss.position = CGPoint(x: frame.midX, y: frame.maxY + size.height)
+        boss.zPosition = 6
+        boss.name = "boss"
+        
+        let body = SKPhysicsBody(rectangleOf: size)
+        body.isDynamic = true
+        body.affectedByGravity = false
+        body.allowsRotation = false
+        body.categoryBitMask = PhysicsCategory.enemy
+        body.collisionBitMask = 0
+        body.contactTestBitMask = PhysicsCategory.arrow | PhysicsCategory.player
+        boss.physicsBody = body
+        
+        let hpBase = 60 + level * 10
+        if boss.userData == nil { boss.userData = NSMutableDictionary() }
+        boss.userData?["hp"] = hpBase
+        
+        addChild(boss)
+        currentBossNode = boss
+        
+        let distance = (boss.position.y - (frame.midY + 140))
+        let duration = TimeInterval(distance / 90)
+        let moveDown = SKAction.moveTo(y: frame.midY + 140, duration: duration)
+        boss.run(moveDown)
+    }
+    
+    // MARK: - Touch handling
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        movePlayer(touches)
+        if isPerkChoiceActive {
+            handlePerkTouch(touches)
+        } else if isGameOver {
+            handleDeathTouch(touches)
+        } else {
+            movePlayer(touches)
+        }
     }
     
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if isPerkChoiceActive || isGameOver { return }
         movePlayer(touches)
     }
     
@@ -276,6 +338,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             enemy.userData?["hp"] = newHP
             
             showDamagePopup(amount: damage, at: contact.contactPoint, isCrit: isCrit)
+            triggerHapticHit(isCrit: isCrit)
+            
             let flash = SKAction.sequence([
                 .group([
                     .scale(to: 1.08, duration: 0.05),
@@ -289,12 +353,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             enemy.run(flash)
             
             if newHP <= 0 {
-                dropCoins(at: enemy.position)
+                if enemy.name == "boss" { dropCoins(at: enemy.position, bonus: 12); bossDefeated() } else { dropCoins(at: enemy.position) }
                 enemy.removeFromParent()
                 onEnemyKilled()
             }
             
             arrow.removeFromParent()
+        } else if first.categoryBitMask == PhysicsCategory.player && second.categoryBitMask == PhysicsCategory.enemy {
+            handlePlayerDeath()
         }
     }
     
@@ -308,34 +374,19 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     
     private func onEnemyKilled() {
         killsCount += 1
-        applyUpgradesIfNeeded()
+        if killsCount % 10 == 0 { presentPerkChoice() }
+        if killsCount % 50 == 0 { spawnBoss() }
     }
     
-    // MARK: - Upgrades
-    private func applyUpgradesIfNeeded() {
-        switch killsCount {
-        case 5:
-            level += 1
-            fireInterval = max(0.55, fireInterval - 0.2)
-            startAutoFire()
-        case 10:
-            level += 1
-            arrowsPerShot = 2
-        case 20:
-            level += 1
-            arrowsPerShot = 3
-        case 35:
-            level += 1
-            enemySpawnInterval = max(0.6, enemySpawnInterval - 0.3)
-            startEnemySpawns()
-        default:
-            break
-        }
+    private func bossDefeated() {
+        isBossActive = false
+        startEnemySpawns()
     }
     
     // MARK: - Loot and HUD effects
-    private func dropCoins(at position: CGPoint) {
-        let num = Int.random(in: 1...2)
+    private func dropCoins(at position: CGPoint, bonus: Int = 0) {
+        let num = Int.random(in: 1...2) + bonus
+        let groundY = (playerNode?.position.y ?? frame.minY) + 18
         for i in 0..<num {
             let coin = SKSpriteNode(color: .systemYellow, size: CGSize(width: 10, height: 10))
             coin.name = "coin"
@@ -345,12 +396,18 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             addChild(coin)
             
             let angle = CGFloat.random(in: 0..<(2 * .pi))
-            let distance: CGFloat = 20 + CGFloat(i) * 4
+            let distance: CGFloat = 22 + CGFloat(i % 6) * 4
             let target = CGPoint(x: position.x + cos(angle) * distance, y: position.y + sin(angle) * distance)
             let appear = SKAction.fadeIn(withDuration: 0.08)
             let moveOut = SKAction.move(to: target, duration: 0.12)
             moveOut.timingMode = .easeOut
-            coin.run(.sequence([appear, moveOut]))
+            
+            let fallDistance = max(0, target.y - groundY)
+            let fallDuration = TimeInterval(fallDistance / max(60, coinFallSpeedPointsPerSecond))
+            let fallToRow = SKAction.moveTo(y: groundY, duration: fallDuration)
+            fallToRow.timingMode = .easeIn
+            
+            coin.run(SKAction.sequence([appear, moveOut, fallToRow]))
         }
     }
     
@@ -372,6 +429,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     
     private func onCoinPicked(amount: Int) {
         coins += amount
+        persistCoinsIncrease(by: amount)
         coinsLabel.removeAllActions()
         let bump = SKAction.sequence([
             .scale(to: 1.15, duration: 0.08),
@@ -397,6 +455,269 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         label.run(SKAction.sequence([scale, .group([move, fade]), .removeFromParent()]))
     }
     
+    // MARK: - Perk choice overlay
+    private func presentPerkChoice() {
+        if isPerkChoiceActive || isGameOver { return }
+        isPerkChoiceActive = true
+        
+        removeAction(forKey: "autoFire")
+        removeAction(forKey: "spawnEnemies")
+        
+        let overlay = SKNode()
+        overlay.name = "perkOverlay"
+        overlay.zPosition = 500
+        
+        let dim = SKSpriteNode(color: SKColor(white: 0, alpha: 0.6), size: frame.size)
+        dim.position = CGPoint(x: frame.midX, y: frame.midY)
+        dim.zPosition = 0
+        overlay.addChild(dim)
+        
+        let title = SKLabelNode(fontNamed: "Menlo-Bold")
+        title.text = "Выбери перк"
+        title.fontSize = 20
+        title.fontColor = .white
+        title.position = CGPoint(x: frame.midX, y: frame.midY + 120)
+        title.zPosition = 1
+        overlay.addChild(title)
+        
+        let choices = generatePerkChoices(count: 3)
+        let spacing: CGFloat = 150
+        for (i, perk) in choices.enumerated() {
+            let node = buildPerkOptionNode(perk: perk)
+            let x = frame.midX + (CGFloat(i) - 1) * spacing
+            node.position = CGPoint(x: x, y: frame.midY)
+            node.zPosition = 2
+            node.name = "perkOption-\(i)"
+            if node.userData == nil { node.userData = NSMutableDictionary() }
+            node.userData?["perk"] = perkIdentifier(perk)
+            overlay.addChild(node)
+        }
+        
+        addChild(overlay)
+        perkOverlay = overlay
+    }
+    
+    private func handlePerkTouch(_ touches: Set<UITouch>) {
+        guard let touch = touches.first, let overlay = perkOverlay else { return }
+        let location = touch.location(in: self)
+        let nodesAtPoint = nodes(at: location)
+        for node in nodesAtPoint {
+            if node.name?.hasPrefix("perkOption-") == true {
+                applyPerkNode(node)
+                break
+            } else if let parent = node.parent, parent.name?.hasPrefix("perkOption-") == true {
+                applyPerkNode(parent)
+                break
+            }
+        }
+    }
+    
+    private func applyPerkNode(_ node: SKNode) {
+        guard let perkId = node.userData?["perk"] as? String else { return }
+        applyPerk(identifier: perkId)
+        level += 1
+        triggerHapticPerk()
+        dismissPerkChoice()
+        startAutoFire()
+        startEnemySpawns()
+    }
+    
+    private func dismissPerkChoice() {
+        perkOverlay?.removeFromParent()
+        perkOverlay = nil
+        isPerkChoiceActive = false
+    }
+    
+    private func generatePerkChoices(count: Int) -> [PerkType] {
+        var pool = PerkType.allCases
+        pool.shuffle()
+        return Array(pool.prefix(count))
+    }
+    
+    private func buildPerkOptionNode(perk: PerkType) -> SKNode {
+        let size = CGSize(width: 120, height: 120)
+        let card = SKShapeNode(rectOf: size, cornerRadius: 14)
+        card.fillColor = SKColor(white: 0.15, alpha: 0.9)
+        card.strokeColor = SKColor(white: 1.0, alpha: 0.2)
+        card.lineWidth = 2
+        
+        let title = SKLabelNode(fontNamed: "Menlo-Bold")
+        title.text = perkTitle(perk)
+        title.fontColor = .white
+        title.fontSize = 14
+        title.position = CGPoint(x: 0, y: 24)
+        title.zPosition = 1
+        card.addChild(title)
+        
+        let desc = SKLabelNode(fontNamed: "Menlo")
+        desc.text = perkDescription(perk)
+        desc.fontColor = SKColor(white: 1.0, alpha: 0.8)
+        desc.fontSize = 11
+        desc.position = CGPoint(x: 0, y: -10)
+        desc.zPosition = 1
+        desc.numberOfLines = 2
+        desc.preferredMaxLayoutWidth = 100
+        desc.lineBreakMode = .byWordWrapping
+        card.addChild(desc)
+        
+        return card
+    }
+    
+    private func perkTitle(_ perk: PerkType) -> String {
+        switch perk {
+        case .fireRate: return "Скорострельность"
+        case .extraArrow: return "+1 стрела"
+        case .critChance: return "Крит шанс"
+        case .critDamage: return "Крит урон"
+        case .magnet: return "Магнит монет"
+        case .damage: return "+1 урон"
+        }
+    }
+    
+    private func perkDescription(_ perk: PerkType) -> String {
+        switch perk {
+        case .fireRate: return "Стреляешь быстрее"
+        case .extraArrow: return "Больше стрел в залпе"
+        case .critChance: return "+5% шанс крита"
+        case .critDamage: return "+0.5x множитель крита"
+        case .magnet: return "+20 радиус подбора монет"
+        case .damage: return "+1 базовый урон"
+        }
+    }
+    
+    private func perkIdentifier(_ perk: PerkType) -> String {
+        switch perk {
+        case .fireRate: return "fireRate"
+        case .extraArrow: return "extraArrow"
+        case .critChance: return "critChance"
+        case .critDamage: return "critDamage"
+        case .magnet: return "magnet"
+        case .damage: return "damage"
+        }
+    }
+    
+    private func applyPerk(identifier: String) {
+        switch identifier {
+        case "fireRate":
+            fireInterval = max(0.3, fireInterval - 0.15)
+        case "extraArrow":
+            arrowsPerShot = min(arrowsPerShot + 1, 6)
+        case "critChance":
+            critChance = min(0.6, critChance + 0.05)
+        case "critDamage":
+            critMultiplier = min(4.0, critMultiplier + 0.5)
+        case "magnet":
+            coinMagnetRadius = min(200, coinMagnetRadius + 20)
+        case "damage":
+            baseArrowDamage += 1
+        default:
+            break
+        }
+    }
+    
+    // MARK: - Death & Restart
+    private func handlePlayerDeath() {
+        if isGameOver { return }
+        isGameOver = true
+        triggerHapticDeath()
+        
+        removeAction(forKey: "autoFire")
+        removeAction(forKey: "spawnEnemies")
+        
+        enumerateChildNodes(withName: "arrow") { node, _ in node.removeFromParent() }
+        enumerateChildNodes(withName: "enemy") { node, _ in node.removeAllActions() }
+        if let boss = currentBossNode { boss.removeAllActions() }
+        
+        presentDeathOverlay()
+    }
+    
+    private func presentDeathOverlay() {
+        let overlay = SKNode()
+        overlay.name = "deathOverlay"
+        overlay.zPosition = 600
+        
+        let dim = SKSpriteNode(color: SKColor(white: 0, alpha: 0.7), size: frame.size)
+        dim.position = CGPoint(x: frame.midX, y: frame.midY)
+        overlay.addChild(dim)
+        
+        let title = SKLabelNode(fontNamed: "Menlo-Bold")
+        title.text = "Ты умер"
+        title.fontSize = 22
+        title.fontColor = .white
+        title.position = CGPoint(x: frame.midX, y: frame.midY + 80)
+        overlay.addChild(title)
+        
+        let stats = SKLabelNode(fontNamed: "Menlo")
+        stats.text = "Kills: \(killsCount)  Coins: \(coins)"
+        stats.fontSize = 14
+        stats.fontColor = .white
+        stats.position = CGPoint(x: frame.midX, y: frame.midY + 46)
+        overlay.addChild(stats)
+        
+        let button = SKShapeNode(rectOf: CGSize(width: 160, height: 48), cornerRadius: 12)
+        button.fillColor = SKColor(white: 0.2, alpha: 1)
+        button.strokeColor = SKColor(white: 1, alpha: 0.3)
+        button.lineWidth = 2
+        button.position = CGPoint(x: frame.midX, y: frame.midY - 10)
+        button.name = "restartButton"
+        
+        let label = SKLabelNode(fontNamed: "Menlo-Bold")
+        label.text = "Заново"
+        label.fontSize = 16
+        label.fontColor = .white
+        label.position = CGPoint(x: 0, y: -6)
+        label.name = "restartButton"
+        button.addChild(label)
+        
+        overlay.addChild(button)
+        addChild(overlay)
+        deathOverlay = overlay
+    }
+    
+    private func handleDeathTouch(_ touches: Set<UITouch>) {
+        guard let touch = touches.first else { return }
+        let location = touch.location(in: self)
+        let hitNodes = nodes(at: location)
+        for node in hitNodes {
+            if node.name == "restartButton" || node.parent?.name == "restartButton" {
+                restartRun()
+                break
+            }
+        }
+    }
+    
+    private func restartRun() {
+        let newScene = GameScene(size: size)
+        newScene.scaleMode = scaleMode
+        view?.presentScene(newScene, transition: .fade(withDuration: 0.3))
+    }
+    
+    // MARK: - Persistence
+    private func persistCoinsIncrease(by amount: Int) {
+        let key = "TotalCoins"
+        let current = UserDefaults.standard.integer(forKey: key)
+        UserDefaults.standard.set(current + amount, forKey: key)
+    }
+    
+    // MARK: - Haptics
+    private func triggerHapticHit(isCrit: Bool) {
+        let generator = UIImpactFeedbackGenerator(style: isCrit ? .medium : .light)
+        generator.prepare()
+        generator.impactOccurred()
+    }
+    
+    private func triggerHapticDeath() {
+        let gen = UINotificationFeedbackGenerator()
+        gen.prepare()
+        gen.notificationOccurred(.error)
+    }
+    
+    private func triggerHapticPerk() {
+        let gen = UINotificationFeedbackGenerator()
+        gen.prepare()
+        gen.notificationOccurred(.success)
+    }
+    
     // MARK: - Frame update
     override func update(_ currentTime: TimeInterval) {
         enumerateChildNodes(withName: "arrow") { node, _ in
@@ -404,6 +725,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 node.removeFromParent()
             }
         }
-        tryMagnetCoins()
+        if !isPerkChoiceActive && !isGameOver {
+            tryMagnetCoins()
+        }
     }
 }
