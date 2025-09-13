@@ -86,6 +86,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var backgroundNode: SKSpriteNode!
     private var circleParticleTexture: SKTexture?
     private var gameCamera: SKCameraNode?
+    private var soundEnabled: Bool = true
+    private var hapticsEnabled: Bool = true
+    private var isSettingsActive: Bool = false
+    private var settingsOverlay: SKNode?
+    private var pauseButton: SKShapeNode!
+    private var perkProgressBG: SKShapeNode!
+    private var perkProgressFill: SKSpriteNode!
+    private var topSafeInset: CGFloat = 0
     
     // MARK: - Scene lifecycle
     override func didMove(to view: SKView) {
@@ -104,9 +112,24 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         configureEnemyTypes()
         setupPlayer()
         setupHUD()
+        // Load UX preferences
+        soundEnabled = UserDefaults.standard.object(forKey: "SoundEnabled") as? Bool ?? true
+        hapticsEnabled = UserDefaults.standard.object(forKey: "HapticsEnabled") as? Bool ?? true
+        topSafeInset = view.safeAreaInsets.top
+        setupPauseButton()
+        setupPerkProgress()
         startAutoFire()
         startEnemySpawns()
         updateHUD()
+        // Ensure safe area is applied after layout on first launch
+        DispatchQueue.main.async { [weak self] in
+            self?.updateSafeAreaAndRelayout()
+        }
+    }
+
+    override func didChangeSize(_ oldSize: CGSize) {
+        super.didChangeSize(oldSize)
+        updateSafeAreaAndRelayout()
     }
     
     // MARK: - Setup
@@ -161,6 +184,198 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         killsLabel?.text = "Kills: \(killsCount)"
         levelLabel?.text = "Lvl: \(level)"
         coinsLabel?.text = "\u{1F4B0} \(coins)"
+        updatePerkProgress()
+    }
+
+    // MARK: - Pause button & Settings
+    private func setupPauseButton() {
+        let radius: CGFloat = 16
+        let button = SKShapeNode(circleOfRadius: radius)
+        button.fillColor = SKColor(white: 0.15, alpha: 0.95)
+        button.strokeColor = SKColor(white: 1.0, alpha: 0.25)
+        button.lineWidth = 2
+        button.zPosition = 150
+        button.position = CGPoint(x: frame.minX + 26, y: frame.maxY - 44 - topSafeInset)
+        button.name = "pauseButton"
+        
+        // pause icon (II)
+        let bar1 = SKShapeNode(rectOf: CGSize(width: 3, height: 12), cornerRadius: 1)
+        bar1.fillColor = .white
+        bar1.strokeColor = .clear
+        bar1.position = CGPoint(x: -4, y: 0)
+        let bar2 = SKShapeNode(rectOf: CGSize(width: 3, height: 12), cornerRadius: 1)
+        bar2.fillColor = .white
+        bar2.strokeColor = .clear
+        bar2.position = CGPoint(x: 4, y: 0)
+        button.addChild(bar1)
+        button.addChild(bar2)
+        
+        addChild(button)
+        pauseButton = button
+    }
+
+    private func presentSettingsOverlay() {
+        if isSettingsActive || isGameOver || isPerkChoiceActive { return }
+        isSettingsActive = true
+        pauseGameplay()
+        
+        let overlay = SKNode()
+        overlay.name = "settingsOverlay"
+        overlay.zPosition = 700
+        
+        let dim = SKSpriteNode(color: SKColor(white: 0, alpha: 0.6), size: frame.size)
+        dim.position = CGPoint(x: frame.midX, y: frame.midY)
+        dim.name = "settingsDim"
+        overlay.addChild(dim)
+        
+        let panel = SKShapeNode(rectOf: CGSize(width: 260, height: 180), cornerRadius: 16)
+        panel.fillColor = SKColor(white: 0.15, alpha: 1.0)
+        panel.strokeColor = SKColor(white: 1.0, alpha: 0.25)
+        panel.lineWidth = 2
+        panel.position = CGPoint(x: frame.midX, y: frame.midY)
+        overlay.addChild(panel)
+        
+        let title = SKLabelNode(fontNamed: "Menlo-Bold")
+        title.text = "Пауза"
+        title.fontSize = 18
+        title.fontColor = .white
+        title.position = CGPoint(x: 0, y: 56)
+        panel.addChild(title)
+        
+        let soundRow = buildToggleRow(title: "Звук", isOn: soundEnabled, name: "toggleSound")
+        soundRow.position = CGPoint(x: 0, y: 18)
+        panel.addChild(soundRow)
+        
+        let hapticsRow = buildToggleRow(title: "Вибрация", isOn: hapticsEnabled, name: "toggleHaptics")
+        hapticsRow.position = CGPoint(x: 0, y: -20)
+        panel.addChild(hapticsRow)
+        
+        let resumeBtn = SKShapeNode(rectOf: CGSize(width: 180, height: 42), cornerRadius: 10)
+        resumeBtn.fillColor = SKColor(white: 0.25, alpha: 1.0)
+        resumeBtn.strokeColor = SKColor(white: 1.0, alpha: 0.25)
+        resumeBtn.lineWidth = 2
+        resumeBtn.position = CGPoint(x: 0, y: -66)
+        resumeBtn.name = "resumeButton"
+        let resumeLabel = SKLabelNode(fontNamed: "Menlo-Bold")
+        resumeLabel.text = "Продолжить"
+        resumeLabel.fontSize = 14
+        resumeLabel.fontColor = .white
+        resumeLabel.position = CGPoint(x: 0, y: -6)
+        resumeLabel.name = "resumeButton"
+        resumeBtn.addChild(resumeLabel)
+        panel.addChild(resumeBtn)
+        
+        addChild(overlay)
+        settingsOverlay = overlay
+    }
+
+    private func dismissSettingsOverlay() {
+        settingsOverlay?.removeFromParent()
+        settingsOverlay = nil
+        isSettingsActive = false
+        resumeGameplay()
+    }
+
+    private func buildToggleRow(title: String, isOn: Bool, name: String) -> SKNode {
+        let row = SKNode()
+        row.name = name
+        
+        let label = SKLabelNode(fontNamed: "Menlo")
+        label.text = title
+        label.fontSize = 14
+        label.fontColor = .white
+        label.horizontalAlignmentMode = .left
+        label.position = CGPoint(x: -100, y: -6)
+        row.addChild(label)
+        
+        let track = SKShapeNode(rectOf: CGSize(width: 52, height: 26), cornerRadius: 13)
+        track.fillColor = SKColor(white: 0.2, alpha: 1.0)
+        track.strokeColor = SKColor(white: 1.0, alpha: 0.25)
+        track.lineWidth = 2
+        track.position = CGPoint(x: 84, y: -8)
+        track.name = name
+        row.addChild(track)
+        
+        let knob = SKShapeNode(circleOfRadius: 10)
+        knob.fillColor = isOn ? .systemGreen : SKColor(white: 0.5, alpha: 1.0)
+        knob.strokeColor = .clear
+        knob.position = CGPoint(x: isOn ? 12 : -12, y: 0)
+        knob.name = name
+        track.addChild(knob)
+        
+        return row
+    }
+
+    private func handleSettingsTouch(_ touches: Set<UITouch>) {
+        guard let touch = touches.first else { return }
+        let location = touch.location(in: self)
+        let nodesAtPoint = nodes(at: location)
+        for node in nodesAtPoint {
+            if node.name == "resumeButton" {
+                dismissSettingsOverlay()
+                return
+            }
+            if node.name == "toggleSound" {
+                soundEnabled.toggle()
+                UserDefaults.standard.set(soundEnabled, forKey: "SoundEnabled")
+                settingsOverlay?.removeFromParent()
+                settingsOverlay = nil
+                isSettingsActive = false
+                presentSettingsOverlay()
+                return
+            }
+            if node.name == "toggleHaptics" {
+                hapticsEnabled.toggle()
+                UserDefaults.standard.set(hapticsEnabled, forKey: "HapticsEnabled")
+                settingsOverlay?.removeFromParent()
+                settingsOverlay = nil
+                isSettingsActive = false
+                presentSettingsOverlay()
+                return
+            }
+        }
+    }
+
+    // MARK: - Perk progress
+    private func setupPerkProgress() {
+        let width: CGFloat = 140
+        let height: CGFloat = 8
+        let bg = SKShapeNode(rectOf: CGSize(width: width, height: height), cornerRadius: 4)
+        bg.fillColor = SKColor(white: 0.2, alpha: 0.9)
+        bg.strokeColor = SKColor(white: 1.0, alpha: 0.15)
+        bg.lineWidth = 2
+        bg.position = CGPoint(x: frame.midX, y: frame.maxY - 40 - topSafeInset)
+        bg.zPosition = 100
+        addChild(bg)
+        perkProgressBG = bg
+        
+        let fill = SKSpriteNode(color: .systemGreen, size: CGSize(width: width - 4, height: height - 4))
+        fill.anchorPoint = CGPoint(x: 0.0, y: 0.5)
+        fill.position = CGPoint(x: bg.position.x - (width - 4)/2, y: bg.position.y)
+        fill.zPosition = 101
+        addChild(fill)
+        perkProgressFill = fill
+        updatePerkProgress()
+    }
+
+    private func updatePerkProgress() {
+        guard let fill = perkProgressFill else { return }
+        let progress = CGFloat(killsCount % 10) / 10.0
+        fill.xScale = max(0.0, min(1.0, progress))
+    }
+
+    private func updateSafeAreaAndRelayout() {
+        guard let v = view else { return }
+        topSafeInset = v.safeAreaInsets.top
+        // Reposition pause button and progress bar
+        if let button = pauseButton {
+            button.position = CGPoint(x: frame.minX + 26, y: frame.maxY - 44 - topSafeInset)
+        }
+        if let bg = perkProgressBG, let fill = perkProgressFill {
+            let width = bg.frame.width
+            bg.position = CGPoint(x: frame.midX, y: frame.maxY - 40 - topSafeInset)
+            fill.position = CGPoint(x: bg.position.x - (width - 4)/2, y: bg.position.y)
+        }
     }
     
     private func setupBackground() {
@@ -179,6 +394,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         ])
         bg.run(.repeatForever(pulse))
     }
+    
+    
     
     private func pulseBackgroundStrong() {
         guard let bg = backgroundNode else { return }
@@ -245,6 +462,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         guard let playerNode else { return }
         if isPerkChoiceActive || isGameOver { return }
         let total = max(1, arrowsPerShot)
+        
+        playAnySFX(["shoot.caf","shoot.wav","shoot.mp3"])
         
         // Compute symmetric horizontal offsets so all arrows go straight up in parallel
         let spacing = arrowParallelSpacing
@@ -382,6 +601,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         if isPerkChoiceActive || isGameOver || isBossActive { return }
         isBossActive = true
         removeAction(forKey: "spawnEnemies")
+        playAnySFX(["boss.caf","boss.wav","boss.mp3"])
         
         let size = CGSize(width: 70, height: 70)
         let boss = SKSpriteNode(color: .purple, size: size)
@@ -415,15 +635,30 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         if isPerkChoiceActive {
             handlePerkTouch(touches)
-        } else if isGameOver {
-            handleDeathTouch(touches)
-        } else {
-            movePlayer(touches)
+            return
         }
+        if isGameOver {
+            handleDeathTouch(touches)
+            return
+        }
+        if isSettingsActive {
+            handleSettingsTouch(touches)
+            return
+        }
+        // Check pause button hit
+        if let touch = touches.first {
+            let point = touch.location(in: self)
+            let hit = nodes(at: point).contains { $0.name == "pauseButton" }
+            if hit {
+                presentSettingsOverlay()
+                return
+            }
+        }
+        movePlayer(touches)
     }
     
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if isPerkChoiceActive || isGameOver { return }
+        if isPerkChoiceActive || isGameOver || isSettingsActive { return }
         movePlayer(touches)
     }
     
@@ -451,6 +686,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             
             showDamagePopup(amount: damage, at: contact.contactPoint, isCrit: isCrit)
             triggerHapticHit(isCrit: isCrit)
+            playAnySFX(["hit.caf","hit.wav","hit.mp3"])
             shakeCamera(intensity: isCrit ? 6 : 3, duration: 0.08)
             
             let flash = SKAction.sequence([
@@ -466,7 +702,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             enemy.run(flash)
             
             if newHP <= 0 {
-                if enemy.name == "boss" { dropCoins(at: enemy.position, bonus: 12); bossDefeated(); spawnDeathBurst(at: enemy.position, isBoss: true); shakeCamera(intensity: 12, duration: 0.25) } else { dropCoins(at: enemy.position); spawnDeathBurst(at: enemy.position, isBoss: false) }
+                if enemy.name == "boss" { dropCoins(at: enemy.position, bonus: 12); bossDefeated(); spawnDeathBurst(at: enemy.position, isBoss: true); shakeCamera(intensity: 12, duration: 0.25); playAnySFX(["boss.caf","boss.wav","boss.mp3"]) } else { dropCoins(at: enemy.position); spawnDeathBurst(at: enemy.position, isBoss: false); playAnySFX(["death.caf","death.wav","death.mp3"]) }
                 enemy.removeFromParent()
                 onEnemyKilled()
             }
@@ -550,6 +786,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 path.timingMode = .easeIn
                 node.run(.sequence([path, .removeFromParent()]))
                 self.onCoinPicked(amount: 1)
+                self.playAnySFX(["coin.caf","coin.wav","coin.mp3"])
             }
         }
     }
@@ -645,6 +882,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         applyPerk(identifier: perkId)
         level += 1
         triggerHapticPerk()
+        playAnySFX(["perk.caf","perk.wav","perk.mp3"])
         dismissPerkChoice()
         resumeGameplay()
         startAutoFire()
@@ -663,6 +901,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         enumerateChildNodes(withName: "arrow") { node, _ in node.isPaused = true }
         enumerateChildNodes(withName: "coin") { node, _ in node.isPaused = true }
         currentBossNode?.isPaused = true
+        // stop auto actions
+        removeAction(forKey: "autoFire")
+        removeAction(forKey: "spawnEnemies")
     }
     
     private func resumeGameplay() {
@@ -671,6 +912,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         enumerateChildNodes(withName: "arrow") { node, _ in node.isPaused = false }
         enumerateChildNodes(withName: "coin") { node, _ in node.isPaused = false }
         currentBossNode?.isPaused = false
+        // resume auto actions
+        startAutoFire()
+        if !isBossActive { startEnemySpawns() }
     }
 
     private func generatePerkChoices(count: Int) -> [PerkType] {
@@ -765,6 +1009,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         if isGameOver { return }
         isGameOver = true
         triggerHapticDeath()
+        playAnySFX(["death.caf","death.wav","death.mp3"])
         
         removeAction(forKey: "autoFire")
         removeAction(forKey: "spawnEnemies")
@@ -846,18 +1091,21 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     
     // MARK: - Haptics
     private func triggerHapticHit(isCrit: Bool) {
+        guard hapticsEnabled else { return }
         let generator = UIImpactFeedbackGenerator(style: isCrit ? .medium : .light)
         generator.prepare()
         generator.impactOccurred()
     }
     
     private func triggerHapticDeath() {
+        guard hapticsEnabled else { return }
         let gen = UINotificationFeedbackGenerator()
         gen.prepare()
         gen.notificationOccurred(.error)
     }
     
     private func triggerHapticPerk() {
+        guard hapticsEnabled else { return }
         let gen = UINotificationFeedbackGenerator()
         gen.prepare()
         gen.notificationOccurred(.success)
@@ -900,5 +1148,16 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Emit by triggering birth rate briefly
         emitter.particleBirthRate = isBoss ? 800 : 600
         emitter.run(.sequence([.wait(forDuration: 0.08), .run { emitter.particleBirthRate = 0 }, .wait(forDuration: 0.7), .removeFromParent()]))
+    }
+    
+    // MARK: - SFX
+    private func playAnySFX(_ names: [String]) {
+        guard soundEnabled else { return }
+        for name in names {
+            if Bundle.main.url(forResource: name, withExtension: nil) != nil {
+                run(SKAction.playSoundFileNamed(name, waitForCompletion: false))
+                break
+            }
+        }
     }
 }
