@@ -82,6 +82,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var levelLabel: SKLabelNode!
     private var coinsLabel: SKLabelNode!
     
+    // Visuals
+    private var backgroundNode: SKSpriteNode!
+    private var circleParticleTexture: SKTexture?
+    private var gameCamera: SKCameraNode?
+    
     // MARK: - Scene lifecycle
     override func didMove(to view: SKView) {
         backgroundColor = .black
@@ -93,6 +98,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         physicsBody?.collisionBitMask = 0
         physicsBody?.contactTestBitMask = 0
         
+        setupBackground()
+        setupCamera()
+        prepareParticleTexture()
         configureEnemyTypes()
         setupPlayer()
         setupHUD()
@@ -155,6 +163,66 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         coinsLabel?.text = "\u{1F4B0} \(coins)"
     }
     
+    private func setupBackground() {
+        let bg = SKSpriteNode(color: SKColor(red: 0.05, green: 0.05, blue: 0.08, alpha: 1), size: frame.size)
+        bg.position = CGPoint(x: frame.midX, y: frame.midY)
+        bg.zPosition = -100
+        addChild(bg)
+        backgroundNode = bg
+        
+        // Subtle idle pulse
+        let c1 = SKColor(red: 0.06, green: 0.05, blue: 0.10, alpha: 1)
+        let c2 = SKColor(red: 0.10, green: 0.06, blue: 0.14, alpha: 1)
+        let pulse = SKAction.sequence([
+            .colorize(with: c2, colorBlendFactor: 0.35, duration: 1.2),
+            .colorize(with: c1, colorBlendFactor: 0.2, duration: 1.2)
+        ])
+        bg.run(.repeatForever(pulse))
+    }
+    
+    private func pulseBackgroundStrong() {
+        guard let bg = backgroundNode else { return }
+        let flash = SKAction.sequence([
+            .colorize(with: .systemPurple, colorBlendFactor: 0.65, duration: 0.07),
+            .colorize(withColorBlendFactor: 0.0, duration: 0.25)
+        ])
+        bg.run(flash)
+    }
+    
+    private func setupCamera() {
+        let cam = SKCameraNode()
+        cam.position = CGPoint(x: frame.midX, y: frame.midY)
+        addChild(cam)
+        camera = cam
+        gameCamera = cam
+    }
+    
+    private func shakeCamera(intensity: CGFloat, duration: TimeInterval) {
+        guard let cam = gameCamera else { return }
+        let amplitudeX = intensity
+        let amplitudeY = intensity
+        let numberOfShakes = Int(ceil(duration / 0.015))
+        var actions: [SKAction] = []
+        for _ in 0..<numberOfShakes {
+            let dx = CGFloat.random(in: -amplitudeX...amplitudeX)
+            let dy = CGFloat.random(in: -amplitudeY...amplitudeY)
+            actions.append(.moveBy(x: dx, y: dy, duration: 0.015))
+            actions.append(.moveBy(x: -dx, y: -dy, duration: 0.015))
+        }
+        cam.run(.sequence(actions))
+    }
+    
+    private func prepareParticleTexture() {
+        // Create a small circle texture for emitters
+        let node = SKShapeNode(circleOfRadius: 2)
+        node.fillColor = .white
+        node.strokeColor = .clear
+        node.lineWidth = 0
+        if let tex = view?.texture(from: node) {
+            circleParticleTexture = tex
+        }
+    }
+    
     private func configureEnemyTypes() {
         enemyTypes = [
             EnemyType(name: "grunt", color: .systemRed, baseHP: 3, speed: 120, weight: 1.0),
@@ -203,10 +271,13 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     
     private func spawnArrow(from origin: CGPoint, angleOffset: CGFloat) {
         let arrowSize = CGSize(width: 6, height: 18)
-        let arrow = SKSpriteNode(color: .systemGreen, size: arrowSize)
-        arrow.position = CGPoint(x: origin.x, y: origin.y + 28)
-        arrow.zPosition = 5
-        arrow.name = "arrow"
+        let arrowShape = SKShapeNode(rectOf: arrowSize, cornerRadius: 3)
+        arrowShape.fillColor = .systemGreen
+        arrowShape.strokeColor = .systemGreen
+        arrowShape.glowWidth = 6
+        arrowShape.position = CGPoint(x: origin.x, y: origin.y + 28)
+        arrowShape.zPosition = 5
+        arrowShape.name = "arrow"
         
         let body = SKPhysicsBody(rectangleOf: arrowSize)
         body.isDynamic = true
@@ -215,18 +286,42 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         body.categoryBitMask = PhysicsCategory.arrow
         body.collisionBitMask = 0
         body.contactTestBitMask = PhysicsCategory.enemy
-        arrow.physicsBody = body
+        arrowShape.physicsBody = body
         
-        addChild(arrow)
+        addChild(arrowShape)
         
         let directionAngle = (.pi / 2.0) + angleOffset
         let dx = cos(directionAngle) * arrowSpeedPointsPerSecond
         let dy = sin(directionAngle) * arrowSpeedPointsPerSecond
-        arrow.zRotation = directionAngle
-        arrow.physicsBody?.velocity = CGVector(dx: dx, dy: dy)
+        arrowShape.zRotation = directionAngle
+        arrowShape.physicsBody?.velocity = CGVector(dx: dx, dy: dy)
+        
+        addTrail(to: arrowShape)
         
         let lifetime: TimeInterval = 2.5
-        arrow.run(SKAction.sequence([.wait(forDuration: lifetime), .removeFromParent()]))
+        arrowShape.run(SKAction.sequence([.wait(forDuration: lifetime), .removeFromParent()]))
+    }
+    
+    private func addTrail(to node: SKNode) {
+        guard let tex = circleParticleTexture else { return }
+        let emitter = SKEmitterNode()
+        emitter.particleTexture = tex
+        emitter.particleBirthRate = 180
+        emitter.particleLifetime = 0.22
+        emitter.particleLifetimeRange = 0.05
+        emitter.particlePositionRange = CGVector(dx: 2, dy: 2)
+        emitter.particleSpeed = 0
+        emitter.particleAlpha = 0.9
+        emitter.particleAlphaRange = 0.1
+        emitter.particleAlphaSpeed = -2.8
+        emitter.particleScale = 0.35
+        emitter.particleScaleRange = 0.1
+        emitter.particleScaleSpeed = -1.2
+        emitter.particleColor = .systemGreen
+        emitter.particleBlendMode = .add
+        emitter.zPosition = (node.zPosition - 1)
+        emitter.targetNode = self
+        node.addChild(emitter)
     }
     
     // MARK: - Enemies
@@ -344,7 +439,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     func didBegin(_ contact: SKPhysicsContact) {
         let (first, second) = orderedBodies(contact)
         if first.categoryBitMask == PhysicsCategory.arrow && second.categoryBitMask == PhysicsCategory.enemy {
-            guard let arrow = first.node as? SKSpriteNode, let enemy = second.node as? SKSpriteNode else { return }
+            guard let arrowNode = first.node, let enemy = second.node as? SKSpriteNode else { return }
             
             let isCrit = CGFloat.random(in: 0...1) < critChance
             let raw = CGFloat(baseArrowDamage) * (isCrit ? critMultiplier : 1.0)
@@ -356,6 +451,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             
             showDamagePopup(amount: damage, at: contact.contactPoint, isCrit: isCrit)
             triggerHapticHit(isCrit: isCrit)
+            shakeCamera(intensity: isCrit ? 6 : 3, duration: 0.08)
             
             let flash = SKAction.sequence([
                 .group([
@@ -370,12 +466,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             enemy.run(flash)
             
             if newHP <= 0 {
-                if enemy.name == "boss" { dropCoins(at: enemy.position, bonus: 12); bossDefeated() } else { dropCoins(at: enemy.position) }
+                if enemy.name == "boss" { dropCoins(at: enemy.position, bonus: 12); bossDefeated(); spawnDeathBurst(at: enemy.position, isBoss: true); shakeCamera(intensity: 12, duration: 0.25) } else { dropCoins(at: enemy.position); spawnDeathBurst(at: enemy.position, isBoss: false) }
                 enemy.removeFromParent()
                 onEnemyKilled()
             }
             
-            arrow.removeFromParent()
+            arrowNode.removeFromParent()
         } else if first.categoryBitMask == PhysicsCategory.player && second.categoryBitMask == PhysicsCategory.enemy {
             handlePlayerDeath()
         }
@@ -393,6 +489,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         killsCount += 1
         if killsCount % 10 == 0 { presentPerkChoice() }
         if killsCount % 50 == 0 { spawnBoss() }
+        pulseBackgroundStrong()
     }
     
     private func bossDefeated() {
@@ -412,6 +509,19 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             coin.alpha = 0.0
             addChild(coin)
             
+            // Idle bob + shimmer
+            let bob = SKAction.sequence([
+                .moveBy(x: 0, y: 2, duration: 0.35),
+                .moveBy(x: 0, y: -2, duration: 0.35)
+            ])
+            bob.timingMode = .easeInEaseOut
+            let flip = SKAction.sequence([
+                .scaleX(to: 0.7, duration: 0.25),
+                .scaleX(to: 1.0, duration: 0.25)
+            ])
+            flip.timingMode = .easeInEaseOut
+            coin.run(.repeatForever(.group([bob, flip])))
+            
             let angle = CGFloat.random(in: 0..<(2 * .pi))
             let distance: CGFloat = 22 + CGFloat(i % 6) * 4
             let target = CGPoint(x: position.x + cos(angle) * distance, y: position.y + sin(angle) * distance)
@@ -424,7 +534,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             let fallToRow = SKAction.moveTo(y: groundY, duration: fallDuration)
             fallToRow.timingMode = .easeIn
             
-            coin.run(SKAction.sequence([appear, moveOut, fallToRow]))
+            coin.run(.sequence([appear, moveOut, fallToRow]))
         }
     }
     
@@ -763,5 +873,32 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         if !isPerkChoiceActive && !isGameOver {
             tryMagnetCoins()
         }
+    }
+    
+    private func spawnDeathBurst(at position: CGPoint, isBoss: Bool) {
+        guard let tex = circleParticleTexture else { return }
+        let emitter = SKEmitterNode()
+        emitter.particleTexture = tex
+        emitter.particleBirthRate = 0
+        emitter.numParticlesToEmit = isBoss ? 220 : 70
+        emitter.particleLifetime = isBoss ? 0.6 : 0.4
+        emitter.particlePosition = position
+        emitter.particlePositionRange = CGVector(dx: isBoss ? 80 : 40, dy: isBoss ? 80 : 40)
+        emitter.particleSpeed = isBoss ? 220 : 160
+        emitter.particleSpeedRange = 80
+        emitter.emissionAngleRange = .pi * 2
+        emitter.particleAlpha = 0.9
+        emitter.particleAlphaSpeed = -2.0
+        emitter.particleScale = isBoss ? 0.7 : 0.5
+        emitter.particleScaleRange = 0.2
+        emitter.particleScaleSpeed = -1.5
+        emitter.particleBlendMode = .add
+        emitter.particleColor = isBoss ? .systemPurple : .systemPink
+        emitter.zPosition = 60
+        addChild(emitter)
+        
+        // Emit by triggering birth rate briefly
+        emitter.particleBirthRate = isBoss ? 800 : 600
+        emitter.run(.sequence([.wait(forDuration: 0.08), .run { emitter.particleBirthRate = 0 }, .wait(forDuration: 0.7), .removeFromParent()]))
     }
 }
