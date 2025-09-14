@@ -66,9 +66,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     
     // Tunable gameplay parameters
     private var arrowsPerShot: Int = 1
-    private var fireInterval: TimeInterval = 0.9
+    private var fireInterval: TimeInterval = 0.8
     private var arrowSpeedPointsPerSecond: CGFloat = 900
-    private var enemySpawnInterval: TimeInterval = 1.2
+    private var enemySpawnInterval: TimeInterval = 1.0
     private var enemySpeedPointsPerSecond: CGFloat = 120
     private var arrowParallelSpacing: CGFloat = 18
     
@@ -114,6 +114,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var perkProgressBG: SKShapeNode!
     private var perkProgressFill: SKSpriteNode!
     private var topSafeInset: CGFloat = 0
+    // Perk rhythm
+    private var nextPerkAtKills: Int = 7
+    private var perksTaken: Int = 0
+    private var killsAtLastPerk: Int = 0
+    private var bossesDefeatedCount: Int = 0
+    private var runStartTime: TimeInterval = 0
     
     // MARK: - Scene lifecycle
     override func didMove(to view: SKView) {
@@ -145,6 +151,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         DispatchQueue.main.async { [weak self] in
             self?.updateSafeAreaAndRelayout()
         }
+        runStartTime = CACurrentMediaTime()
     }
 
     override func didChangeSize(_ oldSize: CGSize) {
@@ -383,7 +390,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     private func updatePerkProgress() {
         guard let fill = perkProgressFill else { return }
-        let progress = CGFloat(killsCount % 10) / 10.0
+        let total = max(1, nextPerkAtKills - killsAtLastPerk)
+        let done = max(0, killsCount - killsAtLastPerk)
+        let progress = CGFloat(done) / CGFloat(total)
         fill.xScale = max(0.0, min(1.0, progress))
         fill.color = progress >= 0.999 ? Theme.progressFull : Theme.progressFill
     }
@@ -488,6 +497,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let total = max(1, arrowsPerShot)
         
         playAnySFX(["shoot.caf","shoot.wav","shoot.mp3"])
+        // small adaptive assist: if игрок долго без перка, ускоряем залпы
+        if killsCount < nextPerkAtKills - 2 {
+            fireInterval = max(0.6, fireInterval - 0.02)
+        }
         
         // Compute symmetric horizontal offsets so all arrows go straight up in parallel
         let spacing = arrowParallelSpacing
@@ -633,7 +646,16 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     // MARK: - Enemies
     private func startEnemySpawns() {
         removeAction(forKey: "spawnEnemies")
-        let wait = SKAction.wait(forDuration: enemySpawnInterval)
+        // spawn pacing uses the same global difficulty idea
+        let t = max(1.0, CACurrentMediaTime() - runStartTime)
+        let timeFactor = pow(t / 60.0, 0.35)
+        let killFactor = pow(Double(max(1, killsCount)) / 30.0, 0.45)
+        let perkFactor = 1.0 + Double(perksTaken) * 0.12
+        let bossFactor = 1.0 + Double(bossesDefeatedCount) * 0.25
+        let globalScale = max(1.0, timeFactor * killFactor * perkFactor * bossFactor)
+        let base = enemySpawnInterval - TimeInterval(level) * 0.02
+        let adjusted = max(0.2, base / min(3.0, globalScale))
+        let wait = SKAction.wait(forDuration: adjusted)
         let spawn = SKAction.run { [weak self] in
             self?.spawnEnemy()
         }
@@ -671,15 +693,25 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         body.contactTestBitMask = PhysicsCategory.arrow | PhysicsCategory.player
         enemy.physicsBody = body
         
-        let hpScale = 1 + max(0, (level - 1)) / 3
-        let initialHP = max(1, type.baseHP + hpScale)
+        // Difficulty scaling formula based on time, kills, perks, bosses
+        let t = max(1.0, CACurrentMediaTime() - runStartTime) // seconds since start
+        let timeFactor = pow(t / 60.0, 0.35) // grows slowly каждую минуту
+        let killFactor = pow(Double(max(1, killsCount)) / 30.0, 0.45)
+        let perkFactor = 1.0 + Double(perksTaken) * 0.12
+        let bossFactor = 1.0 + Double(bossesDefeatedCount) * 0.25
+        let globalScale = max(1.0, timeFactor * killFactor * perkFactor * bossFactor)
+        
+        let hpScale = Int(Double(type.baseHP) * globalScale)
+        let initialHP = max(2, hpScale)
         if enemy.userData == nil { enemy.userData = NSMutableDictionary() }
         enemy.userData?["hp"] = initialHP
         
         addChild(enemy)
         
         let distance = (enemy.position.y - (frame.minY - size.height))
-        let duration = TimeInterval(distance / type.speed)
+        // Speed also scales with globalScale but мягче
+        let speed = type.speed + CGFloat(globalScale) * 20 + CGFloat(level) * 2
+        let duration = TimeInterval(distance / speed)
         let move = SKAction.moveTo(y: frame.minY - size.height, duration: duration)
         enemy.run(SKAction.sequence([move, .removeFromParent()]))
     }
@@ -813,14 +845,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         // Приоритет: босс важнее перка, чтобы перк-оверлей не блокировал спавн босса
         if killsCount % 50 == 0 {
             spawnBoss()
-        } else if killsCount % 10 == 0 {
+        } else if killsCount >= nextPerkAtKills {
             presentPerkChoice()
+            // dynamic next thresholds: 7 -> 15 -> 25 -> 40 -> 60 ...
+            perksTaken += 1
+            nextPerkAtKills += [8, 10, 15, 20].min() ?? 10
         }
         pulseBackgroundStrong()
+        // Recompute spawn pacing as difficulty ramps
+        if !isBossActive && !isPerkChoiceActive { startEnemySpawns() }
     }
     
     private func bossDefeated() {
         isBossActive = false
+        bossesDefeatedCount += 1
         startEnemySpawns()
         // Remove boss HP bar
         bossHPBarBG?.removeFromParent()
@@ -1119,6 +1157,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         resumeGameplay()
         startAutoFire()
         startEnemySpawns()
+        // ramp next perk threshold and refresh progress bar
+        killsAtLastPerk = killsCount
+        nextPerkAtKills = killsCount + (perksTaken == 0 ? 8 : perksTaken == 1 ? 10 : perksTaken == 2 ? 15 : 20)
+        updatePerkProgress()
     }
     
     private func dismissPerkChoice() {
