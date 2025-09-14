@@ -144,6 +144,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         topSafeInset = view.safeAreaInsets.top
         setupPauseButton()
         setupPerkProgress()
+        applyPersistentUpgrades()
         startAutoFire()
         startEnemySpawns()
         updateHUD()
@@ -152,6 +153,16 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             self?.updateSafeAreaAndRelayout()
         }
         runStartTime = CACurrentMediaTime()
+    }
+
+    // Apply upgrades from shop
+    private func applyPersistentUpgrades() {
+        let dmgLevel = UserDefaults.standard.integer(forKey: "UG_damage")
+        let fireLevel = UserDefaults.standard.integer(forKey: "UG_fire")
+        let magnetLevel = UserDefaults.standard.integer(forKey: "UG_magnet")
+        baseArrowDamage += max(0, dmgLevel)
+        fireInterval = max(0.25, fireInterval - 0.04 * Double(fireLevel))
+        coinMagnetRadius = min(260, coinMagnetRadius + CGFloat(20 * magnetLevel))
     }
 
     override func didChangeSize(_ oldSize: CGSize) {
@@ -1359,6 +1370,10 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         isGameOver = true
         triggerHapticDeath()
         playAnySFX(["death.caf","death.wav","death.mp3"])
+        // save best score
+        let bestKey = "BestKills"
+        let best = UserDefaults.standard.integer(forKey: bestKey)
+        if killsCount > best { UserDefaults.standard.set(killsCount, forKey: bestKey) }
         
         removeAction(forKey: "autoFire")
         removeAction(forKey: "spawnEnemies")
@@ -1409,6 +1424,21 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         button.addChild(label)
         
         overlay.addChild(button)
+
+        let menuBtn = SKShapeNode(rectOf: CGSize(width: 160, height: 44), cornerRadius: 12)
+        menuBtn.fillColor = SKColor(white: 0.2, alpha: 1)
+        menuBtn.strokeColor = SKColor(white: 1, alpha: 0.3)
+        menuBtn.lineWidth = 2
+        menuBtn.position = CGPoint(x: frame.midX, y: frame.midY - 64)
+        menuBtn.name = "menuButton"
+        let mLabel = SKLabelNode(fontNamed: "Menlo-Bold")
+        mLabel.text = "В меню"
+        mLabel.fontSize = 16
+        mLabel.fontColor = .white
+        mLabel.position = CGPoint(x: 0, y: -6)
+        mLabel.name = "menuButton"
+        menuBtn.addChild(mLabel)
+        overlay.addChild(menuBtn)
         addChild(overlay)
         deathOverlay = overlay
     }
@@ -1421,6 +1451,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             if node.name == "restartButton" || node.parent?.name == "restartButton" {
                 restartRun()
                 break
+            } else if node.name == "menuButton" || node.parent?.name == "menuButton" {
+                goToMenu()
+                break
             }
         }
     }
@@ -1430,12 +1463,19 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         newScene.scaleMode = scaleMode
         view?.presentScene(newScene, transition: .fade(withDuration: 0.3))
     }
+
+    private func goToMenu() {
+        let scene = MenuScene(size: size)
+        scene.scaleMode = scaleMode
+        view?.presentScene(scene, transition: .fade(withDuration: 0.3))
+    }
     
     // MARK: - Persistence
     private func persistCoinsIncrease(by amount: Int) {
         let key = "TotalCoins"
         let current = UserDefaults.standard.integer(forKey: key)
-        UserDefaults.standard.set(current + amount, forKey: key)
+        let updated = current + amount
+        UserDefaults.standard.set(updated, forKey: key)
     }
     
     // MARK: - Haptics
