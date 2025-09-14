@@ -775,50 +775,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             let raw = CGFloat(baseArrowDamage) * (isCrit ? critMultiplier : 1.0)
             let damage = max(1, Int(ceil(raw)))
             
-            let currentHP = (enemy.userData?["hp"] as? Int) ?? 1
-            var newHP = currentHP - damage
-            enemy.userData?["hp"] = newHP
-            if enemy.name == "boss" {
-                // Use stored bossMaxHP for stable scaling
-                updateBossHPBar(currentHP: max(0, newHP), maxHP: max(1, bossMaxHP))
-            }
+            // base hit
+            applyDamage(to: enemy, amount: damage, showAt: contact.contactPoint, isCrit: isCrit)
             
-            showDamagePopup(amount: damage, at: contact.contactPoint, isCrit: isCrit)
-            triggerHapticHit(isCrit: isCrit)
-            playAnySFX(["hit.caf","hit.wav","hit.mp3"])
-            shakeCamera(intensity: isCrit ? 6 : 3, duration: 0.08)
-            
-            let flash = SKAction.sequence([
-                .group([
-                    .scale(to: 1.08, duration: 0.05),
-                    .colorize(with: .white, colorBlendFactor: 0.7, duration: 0.05)
-                ]),
-                .group([
-                    .scale(to: 1.0, duration: 0.08),
-                    .colorize(withColorBlendFactor: 0.0, duration: 0.08)
-                ])
-            ])
-            enemy.run(flash)
             // Enhanced effects
-            if hasFreeze {
-                let slow = SKAction.speed(to: 0.6, duration: 0.0)
-                let restore = SKAction.speed(to: 1.0, duration: 0.0)
-                enemy.run(SKAction.sequence([slow, .wait(forDuration: 0.6), restore]))
-            }
-            
-            if newHP <= 0 {
-                if hasRicochet, let arrow = first.node as? SKNode {
-                    // spawn a ricochet arrow towards nearest enemy
-                    if let nearest = self.childNode(withName: "enemy") as? SKSpriteNode {
-                        let dx = nearest.position.x - arrow.position.x
-                        let dy = nearest.position.y - arrow.position.y
-                        let ang = atan2(dy, dx)
-                        self.spawnArrow(from: arrow.position, angleOffset: ang - .pi/2)
-                    }
+            if hasFreeze { applyFreeze(to: enemy) }
+            if hasFire { applyBurn(to: enemy) }
+            if hasRicochet, let arrow = first.node as? SKNode {
+                // simple ricochet: spawn one extra arrow towards first found enemy
+                if let nearest = self.children.first(where: { $0.name == "enemy" && $0 !== enemy }) as? SKSpriteNode {
+                    let dx = nearest.position.x - arrow.position.x
+                    let dy = nearest.position.y - arrow.position.y
+                    let ang = atan2(dy, dx)
+                    self.spawnArrow(from: arrow.position, angleOffset: ang - .pi/2)
                 }
-                if enemy.name == "boss" { dropCoins(at: enemy.position, bonus: 12); bossDefeated(); spawnDeathBurst(at: enemy.position, isBoss: true); shakeCamera(intensity: 12, duration: 0.25); playAnySFX(["boss.caf","boss.wav","boss.mp3"]) } else { dropCoins(at: enemy.position); spawnDeathBurst(at: enemy.position, isBoss: false); playAnySFX(["death.caf","death.wav","death.mp3"]) }
-                enemy.removeFromParent()
-                onEnemyKilled()
             }
             
             arrowNode.removeFromParent()
@@ -975,6 +945,66 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let scale = SKAction.scale(to: isCrit ? 1.3 : 1.1, duration: 0.1)
         scale.timingMode = .easeOut
         label.run(SKAction.sequence([scale, .group([move, fade]), .removeFromParent()]))
+    }
+    
+    // MARK: - Damage application helpers
+    private func applyDamage(to enemy: SKSpriteNode, amount: Int, showAt: CGPoint, isCrit: Bool) {
+        let currentHP = (enemy.userData?["hp"] as? Int) ?? 1
+        let newHP = currentHP - amount
+        enemy.userData?["hp"] = newHP
+        if enemy.name == "boss" {
+            updateBossHPBar(currentHP: max(0, newHP), maxHP: max(1, bossMaxHP))
+        }
+        showDamagePopup(amount: amount, at: showAt, isCrit: isCrit)
+        triggerHapticHit(isCrit: isCrit)
+        playAnySFX(["hit.caf","hit.wav","hit.mp3"])
+        shakeCamera(intensity: isCrit ? 6 : 3, duration: 0.08)
+        
+        let flash = SKAction.sequence([
+            .group([
+                .scale(to: 1.08, duration: 0.05),
+                .colorize(with: .white, colorBlendFactor: 0.7, duration: 0.05)
+            ]),
+            .group([
+                .scale(to: 1.0, duration: 0.08),
+                .colorize(withColorBlendFactor: 0.0, duration: 0.08)
+            ])
+        ])
+        enemy.run(flash)
+        
+        if newHP <= 0 {
+            if enemy.name == "boss" { dropCoins(at: enemy.position, bonus: 12); bossDefeated(); spawnDeathBurst(at: enemy.position, isBoss: true); shakeCamera(intensity: 12, duration: 0.25); playAnySFX(["boss.caf","boss.wav","boss.mp3"]) } else { dropCoins(at: enemy.position); spawnDeathBurst(at: enemy.position, isBoss: false); playAnySFX(["death.caf","death.wav","death.mp3"]) }
+            enemy.removeFromParent()
+            onEnemyKilled()
+        }
+    }
+    
+    private func applyFreeze(to enemy: SKSpriteNode) {
+        let slow = SKAction.speed(to: 0.6, duration: 0.0)
+        let restore = SKAction.speed(to: 1.0, duration: 0.0)
+        enemy.run(SKAction.sequence([slow, .wait(forDuration: 0.6), restore]))
+        enemy.color = .systemTeal
+        enemy.colorBlendFactor = 0.6
+        enemy.run(.sequence([.wait(forDuration: 0.6), .colorize(withColorBlendFactor: 0.0, duration: 0.1)]))
+    }
+    
+    private func applyBurn(to enemy: SKSpriteNode) {
+        let ticks = 3
+        let interval: TimeInterval = 0.4
+        for i in 1...ticks {
+            run(.sequence([
+                .wait(forDuration: interval * Double(i)),
+                .run { [weak self, weak enemy] in
+                    guard let self, let enemy = enemy, enemy.parent != nil else { return }
+                    self.applyDamage(to: enemy, amount: max(1, self.baseArrowDamage / 2), showAt: enemy.position, isCrit: false)
+                }
+            ]))
+        }
+        enemy.run(.sequence([
+            .colorize(with: .systemOrange, colorBlendFactor: 0.6, duration: 0.05),
+            .wait(forDuration: interval * Double(ticks)),
+            .colorize(withColorBlendFactor: 0.0, duration: 0.1)
+        ]))
     }
     
     // MARK: - Perk choice overlay
