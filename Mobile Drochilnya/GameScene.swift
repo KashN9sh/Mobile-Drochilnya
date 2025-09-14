@@ -17,6 +17,16 @@ struct PhysicsCategory {
     static let world: UInt32 = 1 << 3
 }
 
+private struct Theme {
+    static let background = SKColor(red: 0.05, green: 0.05, blue: 0.08, alpha: 1)
+    static let panelFill = SKColor(white: 0.15, alpha: 1.0)
+    static let panelStroke = SKColor(white: 1.0, alpha: 0.25)
+    static let hudText = SKColor.white
+    static let hudCoins = SKColor.systemYellow
+    static let progressFill = SKColor.systemGreen
+    static let progressFull = SKColor.systemYellow
+}
+
 private struct EnemyType {
     let name: String
     let color: SKColor
@@ -97,7 +107,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     
     // MARK: - Scene lifecycle
     override func didMove(to view: SKView) {
-        backgroundColor = .black
+        backgroundColor = Theme.background
         physicsWorld.gravity = .zero
         physicsWorld.contactDelegate = self
         
@@ -156,27 +166,30 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         killsLabel.horizontalAlignmentMode = .left
         killsLabel.verticalAlignmentMode = .top
         killsLabel.fontSize = 16
-        killsLabel.fontColor = .white
+        killsLabel.fontColor = Theme.hudText
         killsLabel.position = CGPoint(x: frame.minX + 16, y: frame.maxY - 16)
         killsLabel.zPosition = 100
+        killsLabel.addShadow()
         addChild(killsLabel)
         
         levelLabel = SKLabelNode(fontNamed: "Menlo-Bold")
         levelLabel.horizontalAlignmentMode = .right
         levelLabel.verticalAlignmentMode = .top
         levelLabel.fontSize = 16
-        levelLabel.fontColor = .white
+        levelLabel.fontColor = Theme.hudText
         levelLabel.position = CGPoint(x: frame.maxX - 16, y: frame.maxY - 16)
         levelLabel.zPosition = 100
+        levelLabel.addShadow()
         addChild(levelLabel)
         
         coinsLabel = SKLabelNode(fontNamed: "Menlo-Bold")
         coinsLabel.horizontalAlignmentMode = .center
         coinsLabel.verticalAlignmentMode = .top
         coinsLabel.fontSize = 16
-        coinsLabel.fontColor = .systemYellow
+        coinsLabel.fontColor = Theme.hudCoins
         coinsLabel.position = CGPoint(x: frame.midX, y: frame.maxY - 16)
         coinsLabel.zPosition = 100
+        coinsLabel.addShadow()
         addChild(coinsLabel)
     }
     
@@ -191,8 +204,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private func setupPauseButton() {
         let radius: CGFloat = 16
         let button = SKShapeNode(circleOfRadius: radius)
-        button.fillColor = SKColor(white: 0.15, alpha: 0.95)
-        button.strokeColor = SKColor(white: 1.0, alpha: 0.25)
+        button.fillColor = Theme.panelFill
+        button.strokeColor = Theme.panelStroke
         button.lineWidth = 2
         button.zPosition = 150
         button.position = CGPoint(x: frame.minX + 26, y: frame.maxY - 44 - topSafeInset)
@@ -229,8 +242,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         overlay.addChild(dim)
         
         let panel = SKShapeNode(rectOf: CGSize(width: 260, height: 180), cornerRadius: 16)
-        panel.fillColor = SKColor(white: 0.15, alpha: 1.0)
-        panel.strokeColor = SKColor(white: 1.0, alpha: 0.25)
+        panel.fillColor = Theme.panelFill
+        panel.strokeColor = Theme.panelStroke
         panel.lineWidth = 2
         panel.position = CGPoint(x: frame.midX, y: frame.midY)
         overlay.addChild(panel)
@@ -238,7 +251,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let title = SKLabelNode(fontNamed: "Menlo-Bold")
         title.text = "Пауза"
         title.fontSize = 18
-        title.fontColor = .white
+        title.fontColor = Theme.hudText
         title.position = CGPoint(x: 0, y: 56)
         panel.addChild(title)
         
@@ -252,14 +265,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         let resumeBtn = SKShapeNode(rectOf: CGSize(width: 180, height: 42), cornerRadius: 10)
         resumeBtn.fillColor = SKColor(white: 0.25, alpha: 1.0)
-        resumeBtn.strokeColor = SKColor(white: 1.0, alpha: 0.25)
+        resumeBtn.strokeColor = Theme.panelStroke
         resumeBtn.lineWidth = 2
         resumeBtn.position = CGPoint(x: 0, y: -66)
         resumeBtn.name = "resumeButton"
         let resumeLabel = SKLabelNode(fontNamed: "Menlo-Bold")
         resumeLabel.text = "Продолжить"
         resumeLabel.fontSize = 14
-        resumeLabel.fontColor = .white
+        resumeLabel.fontColor = Theme.hudText
         resumeLabel.position = CGPoint(x: 0, y: -6)
         resumeLabel.name = "resumeButton"
         resumeBtn.addChild(resumeLabel)
@@ -290,7 +303,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         let track = SKShapeNode(rectOf: CGSize(width: 52, height: 26), cornerRadius: 13)
         track.fillColor = SKColor(white: 0.2, alpha: 1.0)
-        track.strokeColor = SKColor(white: 1.0, alpha: 0.25)
+        track.strokeColor = Theme.panelStroke
         track.lineWidth = 2
         track.position = CGPoint(x: 84, y: -8)
         track.name = name
@@ -342,14 +355,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let height: CGFloat = 8
         let bg = SKShapeNode(rectOf: CGSize(width: width, height: height), cornerRadius: 4)
         bg.fillColor = SKColor(white: 0.2, alpha: 0.9)
-        bg.strokeColor = SKColor(white: 1.0, alpha: 0.15)
+        bg.strokeColor = Theme.panelStroke
         bg.lineWidth = 2
         bg.position = CGPoint(x: frame.midX, y: frame.maxY - 40 - topSafeInset)
         bg.zPosition = 100
         addChild(bg)
         perkProgressBG = bg
         
-        let fill = SKSpriteNode(color: .systemGreen, size: CGSize(width: width - 4, height: height - 4))
+        let fill = SKSpriteNode(color: Theme.progressFill, size: CGSize(width: width - 4, height: height - 4))
         fill.anchorPoint = CGPoint(x: 0.0, y: 0.5)
         fill.position = CGPoint(x: bg.position.x - (width - 4)/2, y: bg.position.y)
         fill.zPosition = 101
@@ -362,6 +375,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         guard let fill = perkProgressFill else { return }
         let progress = CGFloat(killsCount % 10) / 10.0
         fill.xScale = max(0.0, min(1.0, progress))
+        fill.color = progress >= 0.999 ? Theme.progressFull : Theme.progressFill
     }
 
     private func updateSafeAreaAndRelayout() {
@@ -379,7 +393,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     }
     
     private func setupBackground() {
-        let bg = SKSpriteNode(color: SKColor(red: 0.05, green: 0.05, blue: 0.08, alpha: 1), size: frame.size)
+        let bg = SKSpriteNode(color: Theme.background, size: frame.size)
         bg.position = CGPoint(x: frame.midX, y: frame.midY)
         bg.zPosition = -100
         addChild(bg)
@@ -650,6 +664,12 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             let point = touch.location(in: self)
             let hit = nodes(at: point).contains { $0.name == "pauseButton" }
             if hit {
+                // button tap animation
+                pauseButton.removeAllActions()
+                pauseButton.run(SKAction.sequence([
+                    .scale(to: 0.92, duration: 0.07),
+                    .scale(to: 1.0, duration: 0.09)
+                ]))
                 presentSettingsOverlay()
                 return
             }
@@ -1159,5 +1179,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 break
             }
         }
+    }
+}
+
+// MARK: - Small utilities
+private extension SKLabelNode {
+    func addShadow() {
+        let shadow = SKLabelNode(fontNamed: self.fontName)
+        shadow.text = self.text ?? ""
+        shadow.fontSize = self.fontSize
+        shadow.fontColor = SKColor(white: 0, alpha: 0.6)
+        shadow.position = CGPoint(x: 1.0, y: -1.0)
+        shadow.zPosition = (self.zPosition - 1)
+        shadow.alpha = 0.6
+        shadow.name = "shadow"
+        self.addChild(shadow)
     }
 }
